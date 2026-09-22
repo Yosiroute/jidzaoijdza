@@ -1,0 +1,49 @@
+name: Label SHA probe
+
+# Se déclenche quand un label est posé sur une PR.
+# But: comparer le SHA figé dans le payload de l'event (github.event...)
+# avec le SHA courant relu en live via l'API, pour mesurer empiriquement
+# s'il existe une fenêtre de course entre la pose du label et l'exécution.
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  probe:
+    name: Echo head SHA
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo SHA (payload figé vs live)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # SHA tel que gelé dans le payload de l'event `labeled`
+          PAYLOAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PAYLOAD_REF: ${{ github.event.pull_request.head.ref }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          # SHA courant relu en direct au moment ou le job tourne
+          LIVE_SHA=$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.sha')
+
+          {
+            echo "when          : $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "label         : $LABEL"
+            echo "pr_number     : $PR_NUMBER"
+            echo "payload_ref   : $PAYLOAD_REF"
+            echo "payload_sha   : $PAYLOAD_SHA   # gele a l'emission de l'event"
+            echo "live_sha      : $LIVE_SHA      # relu maintenant via l'API"
+            if [ "$PAYLOAD_SHA" = "$LIVE_SHA" ]; then
+              echo "verdict       : IDENTIQUES (aucun push apres l'event, ou payload == live)"
+            else
+              echo "verdict       : DIFFERENTS (un commit a ete pousse apres l'emission de l'event)"
+            fi
+          } | tee /tmp/wf.out
+
+          echo "----- resume -----"
+          cat /tmp/wf.out
